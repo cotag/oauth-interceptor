@@ -17,6 +17,7 @@ module.exports = function(config) {
       'app/bower_components/angular-mocks/angular-mocks.js',
       'app/bower_components/angular-safeapply/safe-apply.js',
       'intercept/*.js',
+      'intercept/**/*.js',
       'test/mock/**/*.js',
       'test/spec/**/*.js'
     ],

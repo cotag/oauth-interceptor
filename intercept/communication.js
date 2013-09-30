@@ -17,19 +17,19 @@
 *
 **/
 
-(function(angular) {
+(function (angular) {
     'use strict';
 
     angular.module('OAuth', [])
 
-        .provider('$comms', ['$httpProvider', function($httpProvider) {
+        .provider('$comms', ['$httpProvider', function ($httpProvider) {
             var api_endpoints = [],      // List of configured service endpoints
                 api_configs = {},        // Current state for each service
                 ignore_list = {};        // List of URI's we don't want to retry
 
 
             // Add arguments to the URI ignore list
-            this.ignore = function() {
+            this.ignore = function () {
                 var i;
                 for (i = 0; i < arguments.length; i += 1) {
                     ignore_list[arguments[i]] = 0;
@@ -50,7 +50,7 @@
             //  access_timeout (set by response)
             //  access_token (set by response - timer reference)
             //  waiting_for_token
-            this.service = function(options) {
+            this.service = function (options) {
                 var regex = new RegExp(options.api_endpoint, '');
                 options.request_buffer = [];
 
@@ -63,10 +63,10 @@
             // Inject authorization tokens when required and provide retry functionality for requests
             //    This way we can attempt to login and retry any unauthorized or failed requests
             //
-            $httpProvider.interceptors.push(['$q', '$rootScope', function($q, $rootScope) {
+            $httpProvider.interceptors.push(['$q', '$rootScope', function ($q, $rootScope) {
                 return {
                     // Ensure the access token is attached to API requests
-                    request: function(config) {
+                    request: function (config) {
                         var i, api_config, deferred;
 
                         for (i = 0; i < api_endpoints.length; i += 1) {
@@ -94,7 +94,7 @@
                     },
 
 
-                    responseError: function(response) {
+                    responseError: function (response) {
                         // Check if failures to the URL are to be ignored
                         if (ignore_list[response.config.url] === undefined) {
                             var i, deferred, api_config;
@@ -127,7 +127,7 @@
 
                                 $rootScope.$emit('$comms.serviceRetry', response.config, deferred);
                                 return deferred.promise;
-                                break;
+                                //break; // unreachable
                             }
                         } else {
                             ignore_list[response.config.url] += 1;    // Count the times ignored URIs failed
@@ -142,19 +142,19 @@
 
 
             // The factory method
-            this.$get = ['$q', '$timeout', '$http', '$rootScope', function($q, $timeout, $http, $rootScope) {
+            this.$get = ['$window', '$q', '$timeout', '$http', '$rootScope', function ($window, $q, $timeout, $http, $rootScope) {
 
                 var overrides = {},
-                    retry = function(config, deferred) {
+                    retry = function (config, deferred) {
                         $http(config)    // Config will be intercepted if this is an API call
-                            .success(function(response) {
+                            .success(function (response) {
                                 deferred.resolve(response);
                             })
-                            .error(function(rejection) {
+                            .error(function (rejection) {
                                 deferred.reject(rejection);
                             });
                     },
-                    doRetry = function(config, deferred) {
+                    doRetry = function (config, deferred) {
                         config.retry_count = config.retry_count || -1;
                         config.retry_count += 1;
 
@@ -163,12 +163,12 @@
                         } else if (config.retry_count >= 5) {
                             deferred.reject('retry limit reached');
                         } else {
-                            $timeout(function() {   // Exponentially back off (2 ^ retry_count) + random_number_milliseconds
+                            $timeout(function () {   // Exponentially back off (2 ^ retry_count) + random_number_milliseconds
                                 retry(config, deferred);
                             }, $window.Math.pow(2, config.retry_count) * 1000 + $window.Math.floor($window.Math.random() * 1000));
                         }
                     },
-                    retryAll = function(buffer) {
+                    retryAll = function (buffer) {
                         var request;
                         while (buffer.length > 0) {
                             request = buffer.shift();
@@ -183,7 +183,7 @@
                             }
                         }
                     },
-                    requestToken = function(api_config) {
+                    requestToken = function (api_config) {
                         // One request at a time
                         if (api_config.waiting_for_token) { return; }
 
@@ -209,12 +209,12 @@
                         if (overrides.authenticate) {
                             // Handle the response
                             api_config.waiting_for_token = true;
-                            deferred.promise.then(function(success) {
+                            deferred.promise.then(function (success) {
                                 api_config.access_token = success.token;
                                 api_config.waiting_for_token = false;
 
                                 // Set a new timeout
-                                api_config.access_timeout = $timeout(function() {
+                                api_config.access_timeout = $timeout(function () {
                                     api_config.access_timeout = undefined;
                                     api_config.access_token = undefined;
                                     $rootScope.$emit('$comms.noAuth', api_config);
@@ -238,7 +238,7 @@
 
 
                 // Inform $comms that a service is being performed
-                $rootScope.$on('$comms.servicing', function(event, service) {
+                $rootScope.$on('$comms.servicing', function (event, service) {
                     overrides[service] = true;
                 });
 
@@ -250,7 +250,7 @@
                 //
 
                 // Retry required - most likely a timeout
-                $rootScope.$on('$comms.serviceRetry', function(event, config, deferred) {
+                $rootScope.$on('$comms.serviceRetry', function (event, config, deferred) {
                     overrides.retry = false;
                     $rootScope.$broadcast('$comms.retry', config, deferred);
 
@@ -260,7 +260,7 @@
                 });
 
                 // Auth required
-                $rootScope.$on('$comms.noAuth', function(event, api_config) {
+                $rootScope.$on('$comms.noAuth', function (event, api_config) {
                     // Start the oAuth2 request for the API in question if required
                     if (api_config.proactive || api_config.request_buffer.length > 0) {
                         requestToken(api_config);
@@ -273,6 +273,6 @@
 
 
         // Inject the interceptor
-        .run(['$comms', function() {}]);
+        .run(['$comms', function () {}]);
 
 }(this.angular));
