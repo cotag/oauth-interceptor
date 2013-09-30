@@ -1,0 +1,16 @@
+{
+  "name": "oauth-interceptor",
+  "version": "1.0.0",
+  "main": {
+    "service": "./intercept/communication.js"
+  },
+  "description": "A transparent, configurable, OAuth interceptor for AngularJS",
+  "dependencies": {
+    "angular": "~1.2.0"
+  },
+  "devDependencies": {
+    "jquery": "~2.0.3",
+    "angular-mocks": "~1.2.0",
+    "angular-scenario": "~1.2.0"
+  }
+}
