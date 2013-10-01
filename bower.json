@@ -1,6 +1,6 @@
 {
   "name": "oauth-interceptor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": {
     "service": "./intercept/communication.js"
   },
