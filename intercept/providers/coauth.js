@@ -2,142 +2,100 @@
 (function (angular) {
     'use strict';
 
+    var iframeHidden = '<iframe class="qp-frame qp-background" frameborder="0" allowtransparency="true" seamless sandbox="allow-popups allow-same-origin allow-scripts allow-forms"></iframe>',
+        iframeBanner = '"background-color: transparent; border: 0px none transparent; overflow: hidden; visibility: visible; margin: 0px; padding: 0px; ' +
+                            '-webkit-tap-highlight-color: transparent; position: fixed; left: 0px; top: 0px; width: 100%; height: 100%; z-index: 9999; display: block;"';
+
     angular.module('OAuth').
 
-        directive('coAuth', ['$window', '$timeout', function ($window, $timeout) {
+        factory('authPopup', [function () {
+            return function (uri, iframe) {
+                var host = uri.substr(0, uri.indexOf('/', 8));  // gets the hostname including the http:// \ https:// (hence start at char 8)
+                iframe.attr('style', iframeBanner).attr('src', host + '/login-banner');
+            };
+        }]).
+
+        factory('authCC', [function () {
+            return function (uri, iframe) {
+                var host = uri.substr(0, uri.indexOf('/', 8));  // gets the hostname including the http:// \ https:// (hence start at char 8)
+
+                iframe.attr('style', iframeBanner).attr('src', host + '/cc-banner');
+            };
+        }]).
+
+        directive('coAuth', ['$window', '$timeout', '$injector', function ($window, $timeout, $injector) {
             var elWindow = angular.element($window),
-                origin = $window.location.protocol + '//' + $window.location.hostname + ':' + ($window.location.port === '' ? 80 : $window.location.port);
+                origin = $window.location.protocol + '//' + $window.location.hostname;
+
+            if ($window.location.port !== '') {
+                origin += ':' + $window.location.port;
+            }
 
             return {
                 restrict: 'A',
                 replace: false,
                 scope: {
-                    providerId: '@'
+                    provider: '@',
+                    loginType: '@'
                 },
-                template:
-                    '<div data-ng-show="login_required == true" >' +     // fix data-ng-animate="' + "'fade'" +  '"
-                        '<div>' + // banner
-                        '<div class="limit-width">' + // max width
-                            '<img src="" />' + //logo 
-                            '<div class="text">Please login to continue</div>' +
-                            '<button type="button" data-ng-click="showLoginWindow($event)" class="login-ok">Login</button> <span data-ng-click="hideLoginRequest()" class="cancel">cancel</span> ' +
-                        '</div>' +
-                        '<div>' +
-                    '</div>',
                 link: function (scope, element) {
                     var iframe,    // Holds the iframe element being used for the request
                         handler,   // Holds the remote window handler
                         timeout,   // Holds the timeout for a response from the iframe
-                        popup,     // The pop-up reference
-                        overlay = element.children('div'),   // The modal overlay
-                        banner = overlay.children('div'),    // The login required message
-                        position_banner = function () {
-                            banner.css({
-                                'margin-top': (elWindow.height() / 2) - (banner.height() / 2) + 'px'
-                            });
-                        },
+                        loginService = $injector.get('auth' + scope.loginType),
                         cleanUp = function () {
                             // remove any existing elements auth attempts
                             if (iframe) {
                                 iframe.remove();
                                 iframe = undefined;
-                            } else if (popup) {
-                                if (!popup.closed) {
-                                    popup.close();
-                                }
-                                popup = undefined;
                             }
                             if (handler) {
                                 elWindow.unbind('message', handler);
                                 handler = undefined;
                             }
-                            elWindow.unbind('resize', position_banner);    // just in case we are binding to this
-                            elWindow.unbind('orientationchange', position_banner);
-                        },
-                        requestLogin = function (id, uri, deferred) {
-                            iframe.remove();
-                            iframe = undefined;
-
-                            elWindow.bind('resize orientationchange', position_banner);
-                            position_banner();
-
-                            scope.hideLoginRequest = function () {
-                                cleanUp();
-                                scope.login_required = false;
-                                deferred.reject('cancel');
-                            };
-
-                            scope.$apply(function () {
-                                scope.login_required = true;
-                                scope.showLoginWindow = function () {
-                                    var w = Math.max(400, $window.screen.width / 2),
-                                        h = Math.max(400, $window.screen.height / 2),
-                                        left = Number(($window.screen.width / 2) - (w / 2)),
-                                        top = Number(($window.screen.height / 2) - (h / 2));
-
-                                    if (popup && !popup.closed) {
-                                        popup.close();
-                                    }
-                                    popup = $window.open(uri, id, 'toolbar=no,location=no,directories=no,status=no,menubar=no,scrollbars=yes,resizable=yes,copyhistory=no,width=' + w + ',height=' + h + ',top=' + top + ',left=' + left);
-                                };
-                            });
                         };
-
-                    scope.login_required = false;
 
                     scope.$on('$comms.authenticate', function (event, id, uri, deferred) {
                         // Check the request is for us
-                        if (id === scope.providerId) {
+                        if (id === scope.provider) {
                             scope.$emit('$comms.servicing', 'authenticate');
 
                             cleanUp();
 
                             // create the request using an iframe
                             iframe = angular
-                                .element('<iframe class="core-auth" frameborder="0" seamless sandbox="allow-scripts allow-forms"></iframe>')
+                                .element(iframeHidden)
                                 .attr('src', uri).appendTo(element);
 
                             // iframe or pop-up uses this to communicate with us
                             // curries in request variables
                             handler = function (message) {
                                 message = message.originalEvent || message;
-                                if (message.source === popup || message.source === iframe[0].contentWindow) {
-                                    $timeout.cancel(timeout);
-                                    timeout = undefined;
+                                if (message.source === iframe[0].contentWindow) {
+                                    if (timeout !== undefined) {
+                                        $timeout.cancel(timeout);
+                                        timeout = undefined;
+                                    }
 
                                     switch (message.data) {
                                     case 'login':
-                                        if (!popup || popup.closed) {
-                                            // user action required, we should display the login in a new window
-                                            requestLogin(id, uri, deferred);
-                                        }
+                                        loginService(uri, iframe);
                                         break;
-                                    case 'confirm':
-                                        if (iframe) {
-                                            // no secret data, we'll use an iframe for this
-                                            iframe.addClass('show');
-                                        }
+                                    case 'cancel':
+                                        cleanUp();
+                                        scope.$apply(function () {
+                                            deferred.reject('cancel');
+                                        });
                                         break;
-                                    case 'cancel':    // NOTE:: We want to fall through here
                                     case 'error':
-                                    case '':         // NOTE:: IE less then 10 can't use postMessage on pop-ups (without triggering this)
-                                        // Inform comms that we don't want to go ahead with this
-                                        //    Popup we want to leave open
-                                        if (iframe) {
-                                            if (message.data === 'cancel') {
-                                                cleanUp();
-                                                scope.$apply(function () {
-                                                    deferred.reject('cancel');
-                                                });
-                                            } else {
-                                                requestLogin(id, uri, deferred);
-                                            }
-                                        } else if (popup && !popup.closed) {
-                                            popup.close();    // The user can then open a new popup if desirable
-                                        }
+                                        loginService(uri, iframe);
+                                        break;
+                                    case 'retry':
+                                        // back to token URI
+                                        iframe.removeAttr('style').attr('src', uri);
                                         break;
                                     default:
-                                        if (message.origin === origin || message.origin === 'null') {
+                                        if (message.origin === origin) {
                                             cleanUp();
                                             scope.$apply(function () {
                                                 deferred.resolve(angular.element.parseJSON(message.data));
@@ -149,37 +107,20 @@
                             elWindow.bind('message', handler);
                             timeout = $timeout(function () {
                                 timeout = undefined;
-                                requestLogin(id, uri, deferred);
+                                loginService(uri, iframe);
                             }, 5000, false);    // don't invoke apply
                         }
                     });
 
                     scope.$on('$comms.authenticated', function (event, id) {
-                        if (id === scope.providerId) {
+                        if (id === scope.provider) {
                             cleanUp();
-                            scope.login_required = false;
                         }
                     });
 
                     scope.$on('$destroy', function () {
                         cleanUp();
-                        if ($window.provide_alt_postMessage) {
-                            delete $window.quaypay_postMessage;
-                        }
                     });
-
-                    // Hack for IE less then 10 to support post message on popups
-                    if ($window.provide_alt_postMessage) {
-                        $window.quaypay_postMessage = function (message, popuporigin, source) {
-                            if (handler) {
-                                handler({
-                                    data: message,
-                                    origin: popuporigin,
-                                    source: source
-                                });
-                            }
-                        };
-                    }
                 }
             };
         }]);

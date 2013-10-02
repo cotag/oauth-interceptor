@@ -224,7 +224,7 @@
                                 $rootScope.$broadcast('$comms.authenticated', api_config.id);
                                 retryAll(api_config.request_buffer);
 
-                            }, function() {     // On Failure
+                            }, function () {     // On Failure
                                 // Failure means that the auth directive is letting the user know of the error
                                 // We should clear pending requests
                                 api_config.waiting_for_token = false;
