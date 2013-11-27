@@ -8,6 +8,28 @@
 
     angular.module('OAuth').
 
+        
+
+        factory('authDirected', ['$rootScope','$timeout', 'authPopup', function ($rootScope, $timeout, authPopup) {
+            return function (uri, iframe, reason, provider) {
+                if (provider !== undefined) {
+                    var host = uri.substr(0, uri.indexOf('/', 8));  // gets the hostname including the http:// \ https:// (hence start at char 8)
+                    iframe.attr('style', 'display:none').attr('src', host + '/auth/' + provider).on('load', function(event) {
+                        if ($rootScope.directedTimeout !== undefined) {
+                            $timeout.cancel($rootScope.directedTimeout);
+                            $rootScope.directedTimeout = undefined;
+                        }
+                        $rootScope.directedTimeout = $timeout(function() {
+                            $rootScope.directedPopup = window.open(host + '/auth/' + provider, 'directed-login');
+                            $rootScope.directedTimeout = undefined;
+                        }, 250);
+                    });
+                } else {
+                    authPopup(uri, iframe);
+                }
+            };
+        }]).
+
         factory('authPopup', [function () {
             return function (uri, iframe) {
                 var host = uri.substr(0, uri.indexOf('/', 8));  // gets the hostname including the http:// \ https:// (hence start at char 8)
@@ -23,7 +45,7 @@
             };
         }]).
 
-        directive('coAuth', ['$window', '$timeout', '$injector', function ($window, $timeout, $injector) {
+        directive('coAuth', ['$window', '$timeout', '$injector', '$rootScope', function ($window, $timeout, $injector, $rootScope) {
             var elWindow = angular.element($window),
                 origin = $window.location.protocol + '//' + $window.location.hostname;
 
@@ -42,6 +64,7 @@
                     var iframe,    // Holds the iframe element being used for the request
                         handler,   // Holds the remote window handler
                         timeout,   // Holds the timeout for a response from the iframe
+                        dirLogin = element.attr('login') || $rootScope.directedLogin,
                         loginService = $injector.get('auth' + scope.loginType),
                         cleanUp = function () {
                             // remove any existing elements auth attempts
@@ -52,6 +75,13 @@
                             if (handler) {
                                 elWindow.unbind('message', handler);
                                 handler = undefined;
+                            }
+
+                            if ($rootScope.directedPopup !== undefined) {
+                                if (!$rootScope.directedPopup.closed) {
+                                    $rootScope.directedPopup.close();
+                                }
+                                $rootScope.directedPopup = undefined;
                             }
                         };
 
@@ -65,21 +95,28 @@
                             // create the request using an iframe
                             iframe = angular
                                 .element(iframeHidden)
-                                .attr('src', uri).appendTo(element);
+                                .attr('src', uri);
+
+                                element.append(iframe);
 
                             // iframe or pop-up uses this to communicate with us
                             // curries in request variables
                             handler = function (message) {
                                 message = message.originalEvent || message;
-                                if (message.source === iframe[0].contentWindow) {
+                                if (message.source === iframe[0].contentWindow || message.source === $rootScope.directedPopup) {
                                     if (timeout !== undefined) {
                                         $timeout.cancel(timeout);
                                         timeout = undefined;
                                     }
 
+                                    if ($rootScope.directedTimeout !== undefined) {
+                                        $timeout.cancel($rootScope.directedTimeout);
+                                        $rootScope.directedTimeout = undefined;
+                                    }
+
                                     switch (message.data) {
                                     case 'login':
-                                        loginService(uri, iframe);
+                                        loginService(uri, iframe, message.data, dirLogin);
                                         break;
                                     case 'cancel':
                                         cleanUp();
@@ -88,7 +125,7 @@
                                         });
                                         break;
                                     case 'error':
-                                        loginService(uri, iframe);
+                                        loginService(uri, iframe, message.data);
                                         break;
                                     case 'retry':
                                         // back to token URI
@@ -98,7 +135,7 @@
                                         if (message.origin === origin) {
                                             cleanUp();
                                             scope.$apply(function () {
-                                                deferred.resolve(angular.element.parseJSON(message.data));
+                                                deferred.resolve(JSON.parse(message.data));
                                             });
                                         }
                                     }
@@ -107,7 +144,7 @@
                             elWindow.bind('message', handler);
                             timeout = $timeout(function () {
                                 timeout = undefined;
-                                loginService(uri, iframe);
+                                loginService(uri, iframe, 'timeout');
                             }, 5000, false);    // don't invoke apply
                         }
                     });
