@@ -1,4 +1,3 @@
-
 (function (angular) {
     'use strict';
 
@@ -19,10 +18,7 @@
                             $timeout.cancel($rootScope.directedTimeout);
                             $rootScope.directedTimeout = undefined;
                         }
-                        $rootScope.directedTimeout = $timeout(function() {
-                            $rootScope.directedPopup = window.open(host + '/auth/' + provider, 'directed-login');
-                            $rootScope.directedTimeout = undefined;
-                        }, 250);
+                        window.location = host + '/auth/login?provider=' + provider + '&continue=' + encodeURIComponent(window.location.href);
                     });
                 } else {
                     authPopup(uri, iframe);
