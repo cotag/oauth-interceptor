@@ -75,7 +75,7 @@
 
                                 if (api_config.access_token) {
                                     config.headers.Authorization = 'Bearer ' + api_config.access_token;
-                                } else {
+                                } else if (!api_config.when_prompted) {
                                     // We save the request and instead request a token
                                     deferred = $q.defer();
 
@@ -144,7 +144,8 @@
             // The factory method
             this.$get = ['$window', '$q', '$timeout', '$http', '$rootScope', function ($window, $q, $timeout, $http, $rootScope) {
 
-                var overrides = {},
+                var checkingAuth = {},
+                    overrides = {},
                     retry = function (config, deferred) {
                         $http(config)    // Config will be intercepted if this is an API call
                             .success(function (response) {
@@ -183,7 +184,7 @@
                             }
                         }
                     },
-                    requestToken = function (api_config) {
+                    requestToken = function (api_config, token_only) {
                         // One request at a time
                         if (api_config.waiting_for_token) { return; }
 
@@ -204,7 +205,7 @@
 
                         // Request authentication for the API (delegating to a directive)
                         overrides.authenticate = false;
-                        $rootScope.$broadcast('$comms.authenticate', api_config.id, request, deferred);
+                        $rootScope.$broadcast('$comms.authenticate', api_config.id, request, deferred, token_only);
 
                         if (overrides.authenticate) {
                             // Handle the response
@@ -233,7 +234,10 @@
                         } else {
                             // No handler was available for the authentication request
                             api_config.request_buffer = [];
+                            deferred.reject('no handler');
                         }
+
+                        return deferred.promise;
                     };
 
 
@@ -267,7 +271,38 @@
                     }
                 });
 
-                return {};
+                return {
+                    // return true when logged in
+                    authenticated: function (serviceId) {
+                        !!api_configs[serviceId].access_token;
+                    },
+
+                    // returns a promise that resolves true if user was
+                    // able to grab an access token
+                    // rejects if login process is required
+                    tryAuth: function (serviceId) {
+                        if (checkingAuth[serviceId] === undefined) {
+                            var deferred = $q.defer(),
+                                config = api_configs[serviceId];
+
+                            checkingAuth[serviceId] = deferred;
+
+                            if (!!config.access_token) {
+                                deferred.resolve(true);
+                            } else {
+                                deferred.resolve(requestToken(config, true));
+                            }
+
+                            deferred.promise['finally'](function () {
+                                delete checkingAuth[serviceId];
+                            });
+
+                            return deferred.promise;
+                        }
+
+                        return checkingAuth[serviceId].promise;
+                    }
+                };
             }];
         }])
 
