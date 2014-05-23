@@ -81,7 +81,7 @@
                             }
                         };
 
-                    scope.$on('$comms.authenticate', function (event, id, uri, deferred) {
+                    scope.$on('$comms.authenticate', function (event, id, uri, deferred, tokenOnly) {
                         // Check the request is for us
                         if (id === scope.provider) {
                             scope.$emit('$comms.servicing', 'authenticate');
@@ -112,7 +112,14 @@
 
                                     switch (message.data) {
                                     case 'login':
-                                        loginService(uri, iframe, message.data, dirLogin);
+                                        if (tokenOnly) {
+                                            cleanUp();
+                                            scope.$apply(function () {
+                                                deferred.reject('login required');
+                                            });
+                                        } else {
+                                            loginService(uri, iframe, message.data, dirLogin);
+                                        }
                                         break;
                                     case 'cancel':
                                         cleanUp();
@@ -121,7 +128,14 @@
                                         });
                                         break;
                                     case 'error':
-                                        loginService(uri, iframe, message.data);
+                                        if (tokenOnly) {
+                                            cleanUp();
+                                            scope.$apply(function () {
+                                                deferred.reject('login required');
+                                            });
+                                        } else {
+                                            loginService(uri, iframe, message.data);
+                                        }
                                         break;
                                     case 'retry':
                                         // back to token URI
