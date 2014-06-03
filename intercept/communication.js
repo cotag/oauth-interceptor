@@ -301,6 +301,10 @@
                         }
 
                         return checkingAuth[serviceId].promise;
+                    },
+                    
+                    config: function (serviceId) {
+                        return api_configs[serviceId];
                     }
                 };
             }];
