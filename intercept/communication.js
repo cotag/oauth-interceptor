@@ -20,7 +20,7 @@
 (function (angular) {
     'use strict';
 
-    angular.module('OAuth', [])
+    angular.module('OAuth', ['coUtils'])
 
         .provider('$comms', ['$httpProvider', function ($httpProvider) {
             var api_endpoints = [],      // List of configured service endpoints
@@ -63,7 +63,10 @@
             // Inject authorization tokens when required and provide retry functionality for requests
             //    This way we can attempt to login and retry any unauthorized or failed requests
             //
-            $httpProvider.interceptors.push(['$q', '$rootScope', function ($q, $rootScope) {
+            $httpProvider.interceptors.push([
+                '$q',
+                '$rootScope',
+            function ($q, $rootScope) {
                 return {
                     // Ensure the access token is attached to API requests
                     request: function (config) {
@@ -142,9 +145,17 @@
 
 
             // The factory method
-            this.$get = ['$window', '$q', '$timeout', '$http', '$rootScope', function ($window, $q, $timeout, $http, $rootScope) {
+            this.$get = [
+                '$window',
+                '$q',
+                '$timeout',
+                '$http',
+                '$rootScope',
+                '$storage',
+            function ($window, $q, $timeout, $http, $rootScope, $storage) {
 
-                var checkingAuth = {},
+                var api = {},
+                    checkingAuth = {},
                     overrides = {},
                     retry = function (config, deferred) {
                         $http(config)    // Config will be intercepted if this is an API call
@@ -184,23 +195,44 @@
                             }
                         }
                     },
-                    requestToken = function (api_config, token_only) {
+                    applyToken = function (api_config, token, expires) {
+                        api_config.access_token = token;
+                        api_config.waiting_for_token = false;
+
+                        // Remove the token timeout if it exists
+                        if (api_config.access_timeout !== undefined) {
+                            $timeout.cancel(api_config.access_timeout);
+                        }
+
+                        // Set a new timeout
+                        api_config.access_timeout = $timeout(function () {
+                            api_config.access_timeout = undefined;
+                            api_config.access_token = undefined;
+                            $rootScope.$emit('$comms.noAuth', api_config);
+                        }, expires * 1000);
+
+                        // Inform listeners that we are authenticated
+                        $rootScope.$broadcast('$comms.authenticated', api_config.id);
+                        retryAll(api_config.request_buffer);
+                    },
+                    requestToken = function (api_config, token_only, type) {
+                        // set the defaults
+                        type = type || 'token';
+                        token_only = !!token_only;
+
                         // One request at a time
-                        if (api_config.waiting_for_token) { return; }
+                        if (api_config.waiting_for_token) { 
+                            return api_config.waiting_for_token; 
+                        }
 
                         // Construct the request
                         var deferred = $q.defer(),
-                            request = api_config.oauth_server + '?response_type=token'
+                            request = api_config.oauth_server + '?response_type=' + type
                                         + '&redirect_uri=' + encodeURIComponent(api_config.redirect_uri)
                                         + '&client_id=' + encodeURIComponent(api_config.client_id);
 
                         if (api_config.scope) {
                             request += '&scope=' + encodeURIComponent(api_config.scope);
-                        }
-
-                        // Remove the token timeout if it exists
-                        if (api_config.access_timeout !== undefined) {
-                            $timeout.cancel(api_config.access_timeout);
                         }
 
                         // Request authentication for the API (delegating to a directive)
@@ -209,28 +241,23 @@
 
                         if (overrides.authenticate) {
                             // Handle the response
-                            api_config.waiting_for_token = true;
-                            deferred.promise.then(function (success) {
-                                api_config.access_token = success.token;
-                                api_config.waiting_for_token = false;
+                            api_config.waiting_for_token = 
+                                deferred.promise.then(function (success) {
+                                    if (type === 'token') {
+                                        applyToken(api_config, success.token, success.expires_in);
+                                    } else {
+                                        api_config.waiting_for_token = false;
+                                    }
 
-                                // Set a new timeout
-                                api_config.access_timeout = $timeout(function () {
-                                    api_config.access_timeout = undefined;
-                                    api_config.access_token = undefined;
-                                    $rootScope.$emit('$comms.noAuth', api_config);
-                                }, success.expires_in * 1000);
+                                    return success[type];
+                                }, function () {     // On Failure
+                                    // Failure means that the auth directive is letting the user know of the error
+                                    // We should clear pending requests
+                                    api_config.waiting_for_token = false;
 
-                                // Inform listeners that we are authenticated
-                                $rootScope.$broadcast('$comms.authenticated', api_config.id);
-                                retryAll(api_config.request_buffer);
-
-                            }, function () {     // On Failure
-                                // Failure means that the auth directive is letting the user know of the error
-                                // We should clear pending requests
-                                api_config.waiting_for_token = false;
-                                api_config.request_buffer = [];
-                            });
+                                    // TODO:: we should fail the promises
+                                    api_config.request_buffer = [];
+                                });
                         } else {
                             // No handler was available for the authentication request
                             api_config.request_buffer = [];
@@ -238,6 +265,42 @@
                         }
 
                         return deferred.promise;
+                    },
+                    refreshRequest = function (config, code) {
+                        var options = {
+                            client_id: config.client_id,
+                            redirect_uri: config.redirect_uri
+                        };
+
+                        if (code === undefined) {
+                            options.grant_type = 'refresh_token';
+                        } else {
+                            options.grant_type = 'authorization_code';
+                            options.code = code;
+                        }
+
+                        // getTokenCodeRequest (this requests a refresh token)
+                        return $http.post(config.oauth_tokens, options, {
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json'
+                            }
+                        }).then(function (success) {
+                            success = success.data;
+
+                            // Place the access code in the system
+                            applyToken(config, success.access_token, success.expires_in);
+
+                            // setRefreshTokenMark
+                            $storage.put('refreshToken-' + config.scope, true);
+                            return success.access_token;
+                        }, function (error) {
+                            // Refresh token is no more
+                            if (error.status === 401 || error.status === 400) {
+                                $storage.remove('refreshToken-' + config.scope);
+                                return requestToken(config);
+                            }
+                        });
                     };
 
 
@@ -267,46 +330,79 @@
                 $rootScope.$on('$comms.noAuth', function (event, api_config) {
                     // Start the oAuth2 request for the API in question if required
                     if (api_config.proactive || api_config.request_buffer.length > 0) {
-                        requestToken(api_config);
+                        if ($storage.get('refreshToken-' + api_config.scope)) {
+                            refreshRequest(api_config);
+                        } else {
+                            requestToken(api_config);
+                        }
                     }
                 });
 
-                return {
-                    // return true when logged in
-                    authenticated: function (serviceId) {
-                        !!api_configs[serviceId].access_token;
-                    },
 
-                    // returns a promise that resolves true if user was
-                    // able to grab an access token
-                    // rejects if login process is required
-                    tryAuth: function (serviceId) {
-                        if (checkingAuth[serviceId] === undefined) {
-                            var deferred = $q.defer(),
-                                config = api_configs[serviceId];
+                // return true when logged in
+                api.authenticated = function (serviceId) {
+                    !!api_configs[serviceId].access_token;
+                };
 
-                            checkingAuth[serviceId] = deferred;
+                // returns a promise that resolves true if user was
+                // able to grab an access token
+                // rejects if login process is required
+                api.tryAuth = function (serviceId, force) {
+                    force = !!force;
 
-                            if (!!config.access_token) {
-                                deferred.resolve(true);
+                    if (checkingAuth[serviceId] === undefined) {
+                        var deferred = $q.defer(),
+                            config = api_configs[serviceId];
+
+                        checkingAuth[serviceId] = deferred;
+
+                        if (!!config.access_token) {
+                            deferred.resolve(true);
+                        } else {
+                            if ($storage.get('refreshToken-' + config.scope)) {
+                                deferred.resolve(refreshRequest(config));
                             } else {
-                                deferred.resolve(requestToken(config, true));
+                                deferred.resolve(requestToken(config, !force));
                             }
-
-                            deferred.promise['finally'](function () {
-                                delete checkingAuth[serviceId];
-                            });
-
-                            return deferred.promise;
                         }
 
-                        return checkingAuth[serviceId].promise;
-                    },
-                    
-                    config: function (serviceId) {
-                        return api_configs[serviceId];
+                        deferred.promise['finally'](function () {
+                            delete checkingAuth[serviceId];
+                        });
+
+                        return deferred.promise;
+                    } else if (force) {
+                        return checkingAuth[serviceId].promise.catch(function () {
+                            return api.tryAuth(serviceId, force);
+                        });
                     }
+
+                    return checkingAuth[serviceId].promise;
                 };
+
+                api.getToken = function (serviceId) {
+                    api.tryAuth().then(function (success) {
+                        return api_configs[serviceId].access_token;
+                    });
+                };
+
+                api.rememberMe = function (serviceId) {
+                    var config = api_configs[serviceId];
+
+                    return requestToken(config, false, 'code').then(function (code) {
+                        // Use the grant code to request a refresh token
+                        return refreshRequest(config, code.code);
+                    });
+                };
+
+                api.isRemembered = function (serviceId) {
+                    var config = api_configs[serviceId];
+                    !!$storage.get('refreshToken-' + config.scope);
+                };
+
+
+                // Return the API
+                return api;
             }];
         }])
 
