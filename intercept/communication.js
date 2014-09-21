@@ -380,8 +380,9 @@
                     return checkingAuth[serviceId].promise;
                 };
 
+                // Returns a promise that will force auth and return a valid auth token
                 api.getToken = function (serviceId) {
-                    api.tryAuth().then(function (success) {
+                    return api.tryAuth(serviceId, true).then(function (success) {
                         return api_configs[serviceId].access_token;
                     });
                 };
