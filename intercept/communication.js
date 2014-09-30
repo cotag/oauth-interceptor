@@ -274,6 +274,7 @@
 
                         if (code === undefined) {
                             options.grant_type = 'refresh_token';
+                            options.refresh_token = $storage.get('refreshToken-' + config.scope);
                         } else {
                             options.grant_type = 'authorization_code';
                             options.code = code;
@@ -292,11 +293,11 @@
                             applyToken(config, success.access_token, success.expires_in);
 
                             // setRefreshTokenMark
-                            $storage.put('refreshToken-' + config.scope, true);
+                            $storage.put('refreshToken-' + config.scope, success.refresh_token);
                             return success.access_token;
                         }, function (error) {
                             // Refresh token is no more
-                            if (error.status === 401 || error.status === 400) {
+                            if (error.status !== 500) {
                                 $storage.remove('refreshToken-' + config.scope);
                                 return requestToken(config);
                             }
@@ -330,11 +331,7 @@
                 $rootScope.$on('$comms.noAuth', function (event, api_config) {
                     // Start the oAuth2 request for the API in question if required
                     if (api_config.proactive || api_config.request_buffer.length > 0) {
-                        if ($storage.get('refreshToken-' + api_config.scope)) {
-                            refreshRequest(api_config);
-                        } else {
-                            requestToken(api_config);
-                        }
+                        api.tryAuth(api_config.id, true);
                     }
                 });
 
@@ -357,7 +354,7 @@
                         checkingAuth[serviceId] = deferred;
 
                         if (!!config.access_token) {
-                            deferred.resolve(true);
+                            deferred.resolve(config.access_token);
                         } else {
                             if ($storage.get('refreshToken-' + config.scope)) {
                                 deferred.resolve(refreshRequest(config));
@@ -387,18 +384,41 @@
                     });
                 };
 
+                // Similar to tryAuth force except 
                 api.rememberMe = function (serviceId) {
-                    var config = api_configs[serviceId];
+                    var deferred = $q.defer(),
+                        config = api_configs[serviceId],
+                        codeFlow = function () {
+                            checkingAuth[serviceId] = deferred;
+                            deferred.resolve(requestToken(config, false, 'code').then(function (code) {
+                                // Use the grant code to request a refresh token
+                                return refreshRequest(config, code.code);
+                            }));
+                            deferred.promise['finally'](function () {
+                                delete checkingAuth[serviceId];
+                            });
+                        };
 
-                    return requestToken(config, false, 'code').then(function (code) {
-                        // Use the grant code to request a refresh token
-                        return refreshRequest(config, code.code);
-                    });
+                    if (checkingAuth[serviceId] === undefined) {
+                        codeFlow();
+                    } else {
+                        checkingAuth[serviceId].promise.then(function () {
+                            if (api.isRemembered(serviceId)) {
+                                deferred.resolve(config.access_token);
+                            } else {
+                                codeFlow();
+                            }
+                        });
+                    }
+
+                    return deferred.promise;
                 };
 
                 api.isRemembered = function (serviceId) {
-                    var config = api_configs[serviceId];
-                    !!$storage.get('refreshToken-' + config.scope);
+                    var config = api_configs[serviceId],
+                        result = $storage.get('refreshToken-' + config.scope);
+
+                    return result != undefined;
                 };
 
 
