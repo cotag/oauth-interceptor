@@ -134,7 +134,7 @@
                                                 deferred.reject('login required');
                                             });
                                         } else {
-                                            loginService(uri, iframe, message.data);
+                                            loginService(uri, iframe, message.data, dirLogin);
                                         }
                                         break;
                                     case 'retry':
@@ -154,8 +154,8 @@
                             elWindow.bind('message', handler);
                             timeout = $timeout(function () {
                                 timeout = undefined;
-                                loginService(uri, iframe, 'timeout');
-                            }, 5000, false);    // don't invoke apply
+                                loginService(uri, iframe, 'timeout', dirLogin);
+                            }, 30000, false);    // don't invoke apply
                         }
                     });
 
