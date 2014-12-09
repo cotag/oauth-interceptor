@@ -4,7 +4,7 @@
   "description": "A transparent, configurable, OAuth interceptor for AngularJS",
   "dependencies": {
     "angular": "1.x",
-    "co-storage": "latest"
+    "angular-localforage": "latest"
   },
   "devDependencies": {
     "jquery": "~2.1.0",
