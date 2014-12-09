@@ -20,7 +20,7 @@
 (function (angular) {
     'use strict';
 
-    angular.module('OAuth', ['coUtils'])
+    angular.module('OAuth', ['LocalForageModule'])
 
         .provider('$comms', ['$httpProvider', function ($httpProvider) {
             var api_endpoints = [],      // List of configured service endpoints
@@ -151,7 +151,7 @@
                 '$timeout',
                 '$http',
                 '$rootScope',
-                '$storage',
+                '$localForage',
             function ($window, $q, $timeout, $http, $rootScope, $storage) {
 
                 var api = {},
@@ -268,40 +268,44 @@
                     },
                     refreshRequest = function (config, code) {
                         var options = {
-                            client_id: config.client_id,
-                            redirect_uri: config.redirect_uri
-                        };
+                                client_id: config.client_id,
+                                redirect_uri: config.redirect_uri
+                            },
+                            performPost = function () {
+                                return $http.post(config.oauth_tokens, options, {
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Accept': 'application/json'
+                                    }
+                                }).then(function (success) {
+                                    success = success.data;
+        
+                                    // Place the access code in the system
+                                    applyToken(config, success.access_token, success.expires_in);
+        
+                                    // setRefreshTokenMark
+                                    $storage.setItem('refreshToken-' + config.scope, success.refresh_token);
+                                    return success.access_token;
+                                }, function (error) {
+                                    // Refresh token is no more
+                                    if (error.status !== 500) {
+                                        $storage.removeItem('refreshToken-' + config.scope);
+                                        return requestToken(config);
+                                    }
+                                });
+                            };
 
                         if (code === undefined) {
-                            options.grant_type = 'refresh_token';
-                            options.refresh_token = $storage.get('refreshToken-' + config.scope);
-                        } else {
-                            options.grant_type = 'authorization_code';
-                            options.code = code;
+                            return $storage.getItem('refreshToken-' + config.scope).then(function (token) {
+                                options.grant_type = 'refresh_token';
+                                options.refresh_token = token;
+                                return performPost();
+                            });
                         }
-
-                        // getTokenCodeRequest (this requests a refresh token)
-                        return $http.post(config.oauth_tokens, options, {
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json'
-                            }
-                        }).then(function (success) {
-                            success = success.data;
-
-                            // Place the access code in the system
-                            applyToken(config, success.access_token, success.expires_in);
-
-                            // setRefreshTokenMark
-                            $storage.put('refreshToken-' + config.scope, success.refresh_token);
-                            return success.access_token;
-                        }, function (error) {
-                            // Refresh token is no more
-                            if (error.status !== 500) {
-                                $storage.remove('refreshToken-' + config.scope);
-                                return requestToken(config);
-                            }
-                        });
+                        
+                        options.grant_type = 'authorization_code';
+                        options.code = code;
+                        return performPost();
                     };
 
 
@@ -356,11 +360,15 @@
                         if (!!config.access_token) {
                             deferred.resolve(config.access_token);
                         } else {
-                            if ($storage.get('refreshToken-' + config.scope)) {
-                                deferred.resolve(refreshRequest(config));
-                            } else {
+                            $storage.getItem('refreshToken-' + config.scope).then(function (token) {
+                               if (token) {
+                                    deferred.resolve(refreshRequest(config));
+                                } else {
+                                    deferred.resolve(requestToken(config, !force));
+                                }
+                            }, function () {
                                 deferred.resolve(requestToken(config, !force));
-                            }
+                            });
                         }
 
                         deferred.promise['finally'](function () {
@@ -415,12 +423,15 @@
                 };
 
                 api.isRemembered = function (serviceId) {
-                    var config = api_configs[serviceId],
-                        result = $storage.get('refreshToken-' + config.scope);
-
-                    return result != undefined;
+                    var config = api_configs[serviceId];
+                    return $storage.getItem('refreshToken-' + config.scope).then(function (result) {
+                        if (!result) {
+                            return $q.reject(false);
+                        }
+                        
+                        return result;
+                    });
                 };
-
 
                 // Return the API
                 return api;
