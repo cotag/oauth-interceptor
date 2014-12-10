@@ -411,11 +411,15 @@
                         codeFlow();
                     } else {
                         checkingAuth[serviceId].promise.then(function () {
-                            if (api.isRemembered(serviceId)) {
-                                deferred.resolve(config.access_token);
-                            } else {
+                            api.isRemembered(serviceId).then(function (result) {
+                                if (result) {
+                                    deferred.resolve(config.access_token);
+                                } else {
+                                    codeFlow();
+                                }
+                            }, function (err) {
                                 codeFlow();
-                            }
+                            });
                         });
                     }
 
