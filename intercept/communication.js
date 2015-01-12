@@ -152,7 +152,8 @@
                 '$http',
                 '$rootScope',
                 '$localForage',
-            function ($window, $q, $timeout, $http, $rootScope, $storage) {
+                '$location',
+            function ($window, $q, $timeout, $http, $rootScope, $storage, $location) {
 
                 var api = {},
                     checkingAuth = {},
@@ -216,6 +217,22 @@
                         retryAll(api_config.request_buffer);
                     },
                     requestToken = function (api_config, token_only, type) {
+                        if (api_config.oauth_tokens && $location.search().trust && type !== 'code') {
+                            return $storage.getItem('refreshToken-' + api_config.scope).then(function (token) {
+                                if (token) {
+                                    return refreshRequest(api_config);
+                                } else {
+                                    return requestToken(api_config, false, 'code').then(function (code) {
+                                        // Use the grant code to request a refresh token
+                                        return refreshRequest(api_config, code.code);
+                                    });
+                                }
+                            }, function () {
+                                // Woah!! What to do here? Refresh? Not sure if this is good?
+                                location.reload();
+                            });
+                        }
+
                         // set the defaults
                         type = type || 'token';
                         token_only = !!token_only;
@@ -288,9 +305,15 @@
                                     return success.access_token;
                                 }, function (error) {
                                     // Refresh token is no more
-                                    if (error.status !== 500) {
+                                    // 404 == couchbase error, 500 == other and we should ignore
+                                    if (error.status == 400 || error.status == 401) {
                                         $storage.removeItem('refreshToken-' + config.scope);
                                         return requestToken(config);
+                                    } else {
+                                        // Failure here means we should start again.
+                                        window.setTimeout(function() {
+                                            location.reload();
+                                        }, 4000);
                                     }
                                 });
                             };
