@@ -171,7 +171,7 @@
             var api = {},
                 expired_timeout,
                 tokenNotifier = $q.defer(),
-                authComplete = function (token, expires) {
+                authComplete = function (token, expires, noSave) {
                     var buffered = request_buffer,
                         do_retry = request_retry;
 
@@ -182,6 +182,11 @@
                     authenticating = null;
                     authenticated = true;
                     access_token = token;
+
+                    if (!noSave) {
+                        localStorage.setItem('accessToken', token);
+                        localStorage.setItem('accessExpiry', expires);
+                    }
 
                     if (expired_timeout) {
                         $timeout.cancel(expired_timeout);
@@ -382,7 +387,18 @@
 
                         return $q.reject(failed);
                     });
-                };
+                },
+
+                tempExpires = localStorage.getItem('accessExpiry');
+
+
+
+            // Attempt to load any existing tokens from the cache
+            access_token = localStorage.getItem('accessToken');
+            if (tempExpires && access_token) {
+                authComplete(access_token, tempExpires, true);
+            }
+
 
             // These are accessed by the interceptors
             retryRequest = function (request, deferred) {
