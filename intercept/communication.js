@@ -209,8 +209,12 @@
                         retryRequest(res.response.config, res.deferred);
                     });
 
-                    tokenNotifier.notify(access_token);
-                    scope.$broadcast('$comms.authenticated', access_token);
+                    // This is effectively next_tick so the page has time to load if
+                    // we are loading the tokens from the cache.
+                    $timeout(function () {
+                        tokenNotifier.notify(access_token);
+                        scope.$broadcast('$comms.authenticated', access_token);
+                    });
                 },
                 refreshRequest = function (code) {
                     var options = {
@@ -396,7 +400,7 @@
             // Attempt to load any existing tokens from the cache
             access_token = localStorage.getItem('accessToken');
             if (tempExpires && access_token) {
-                authComplete(access_token, tempExpires, true);
+                authComplete(access_token, parseInt(tempExpires), true);
             }
 
 
