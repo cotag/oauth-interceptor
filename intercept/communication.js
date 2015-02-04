@@ -185,7 +185,7 @@
 
                     if (!noSave) {
                         localStorage.setItem('accessToken', token);
-                        localStorage.setItem('accessExpiry', expires);
+                        localStorage.setItem('accessExpiry', authenticated_at + (expires * 1000));
                     }
 
                     if (expired_timeout) {
@@ -402,8 +402,8 @@
             if (tempExpires && access_token) {
                 tempExpires = parseInt(tempExpires);
 
-                if ((tempExpires - 2) * 1000 > Date.now()) {
-                    authComplete(access_token, tempExpires, true);
+                if ((tempExpires - 2000) > Date.now()) {
+                    authComplete(access_token, tempExpires - Date.now(), true);
                 }
             }
 
