@@ -487,7 +487,7 @@
                 tokenNotifier.promise.then(angular.noop, angular.noop, callback);
             };
 
-            if (config.proactive && !config.when_prompted) {
+            if (config.proactive && !authenticated && !config.when_prompted) {
                 authenticate();
             }
 
