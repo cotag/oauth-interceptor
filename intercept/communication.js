@@ -171,6 +171,23 @@
             var api = {},
                 expired_timeout,
                 tokenNotifier = $q.defer(),
+                inToAt = function (time) {
+                    return time * 1000 + Date.now();
+                },
+                nextTimer = function (expiresAt) {
+                    var timerIn = Math.min(expiresAt - Date.now() - 500, 20000);
+
+                    expired_timeout = $timeout(function () {
+                        if ((expiresAt - 500) <= Date.now()) {
+                            authenticated = false;
+                            if (config.proactive && !config.when_prompted) {
+                                authenticate();
+                            }
+                        } else {
+                            nextTimer(expiresAt);
+                        }
+                    }, Math.max(timerIn, 0));
+                },
                 authComplete = function (token, expires, noSave) {
                     var buffered = request_buffer,
                         do_retry = request_retry;
@@ -185,16 +202,13 @@
 
                     if (!noSave) {
                         localStorage.setItem('accessToken', token);
-                        localStorage.setItem('accessExpiry', authenticated_at + (expires * 1000));
+                        localStorage.setItem('accessExpiry', expires);
                     }
 
                     if (expired_timeout) {
                         $timeout.cancel(expired_timeout);
                     }
-                    expired_timeout = $timeout(function () {
-                        authenticated = false;
-                        authenticate();
-                    }, (expires - 1) * 1000);
+                    nextTimer(expires);
 
                     angular.forEach(buffered, function (req) {
                         var request = req.request;
@@ -234,7 +248,7 @@
                                 localStorage.setItem('refreshToken', success.refresh_token);
     
                                 // Place the access code in the system
-                                authComplete(success.access_token, success.expires_in);
+                                authComplete(success.access_token, inToAt(success.expires_in));
 
                                 return success.access_token;
                             }, function (error) {
@@ -367,7 +381,7 @@
                             return refreshRequest(tokenResp.code);
                         }
 
-                        authComplete(tokenResp.token, tokenResp.expires_in);
+                        authComplete(tokenResp.token, inToAt(tokenResp.expires_in));
                         return tokenResp.token;
                     }, function (failed) {
                         // Fail all existing requests
@@ -402,8 +416,8 @@
             if (tempExpires && access_token) {
                 tempExpires = parseInt(tempExpires);
 
-                if ((tempExpires - 2000) > Date.now()) {
-                    authComplete(access_token, tempExpires - Date.now(), true);
+                if ((tempExpires - 1000) > Date.now()) {
+                    authComplete(access_token, tempExpires, true);
                 }
             }
 
