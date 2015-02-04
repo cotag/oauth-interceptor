@@ -400,7 +400,11 @@
             // Attempt to load any existing tokens from the cache
             access_token = localStorage.getItem('accessToken');
             if (tempExpires && access_token) {
-                authComplete(access_token, parseInt(tempExpires), true);
+                tempExpires = parseInt(tempExpires);
+
+                if ((tempExpires - 2) * 1000 > Date.now()) {
+                    authComplete(access_token, tempExpires, true);
+                }
             }
 
 
