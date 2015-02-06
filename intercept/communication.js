@@ -500,6 +500,12 @@
                 return authenticated;
             };
 
+            api.clearAuth = function () {
+                localStorage.removeItem('accessToken');
+                localStorage.removeItem('accessExpiry');
+                localStorage.removeItem('refreshToken');
+            };
+
             // Callback on token update
             api.notifier = function (callback) {
                 tokenNotifier.promise.then(angular.noop, angular.noop, callback);
