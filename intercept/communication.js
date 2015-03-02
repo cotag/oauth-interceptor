@@ -374,6 +374,7 @@
                         request += '&scope=' + encodeURIComponent(config.scope);
                     }
 
+                    request += '&time=' + Date.now();
                     iframeRequest(request, deferred);
 
                     return deferred.promise.then(function (tokenResp) {
@@ -390,7 +391,6 @@
                         request_buffer = [];
                         request_retry = [];
 
-                        authenticating = null;
                         authenticated = false;
                         access_token = null;
 
@@ -442,6 +442,9 @@
                     if ((do_login === undefined || do_login) && config.login_redirect && reason === 'login') {
                         $window.location = config.login_redirect();
                         return $q.defer().promise;
+                    } else {
+                        // Else we want to retry authentication
+                        authenticating = null;
                     }
 
                     // Continue the failure
@@ -472,9 +475,7 @@
             // Non-destructive authentication attempt
             api.tryAuth = function (force) {
                 if (authenticating) {
-                    return authenticating.finally(function () {
-                        api.tryAuth(force);
-                    });
+                    return authenticating;
                 }
 
                 var deferred = $q.defer();
