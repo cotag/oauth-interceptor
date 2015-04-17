@@ -440,7 +440,14 @@
 
                 return authenticating.catch(function (reason) {
                     if ((do_login === undefined || do_login) && config.login_redirect && reason === 'login') {
-                        $window.location = config.login_redirect();
+                        var redirect = config.login_redirect();
+                        if (redirect.then) {
+                            redirect.then(function (uri) {
+                                $window.location = uri;
+                            });
+                        } else {
+                            $window.location = redirect;
+                        }
                         return $q.defer().promise;
                     } else {
                         // Else we want to retry authentication
