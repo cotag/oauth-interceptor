@@ -28,7 +28,8 @@
     .provider('$comms', ['$httpProvider', function ($httpProvider) {
         var endpoints = [],     // List of configured service endpoints
             lookup = {},
-            ignore_list = {};   // List of URI's we don't want to retry
+            ignore_list = {},
+            provider = this;   // List of URI's we don't want to retry
 
 
         // Add arguments to the URI ignore list
@@ -65,6 +66,8 @@
             if (options.id) {
                 lookup[options.id] = enpoint;
             }
+
+            return enpoint;
         };
 
 
@@ -219,6 +222,16 @@
             api.notifier = function (callback, id) {
                 getEndpoint(id).notifier(callback);
             };
+
+
+            api.hasProvider = function (id) {
+                return lookup[id];
+            };
+
+            api.addProvider = function (config) {
+                provider.service(config).onLoad($window, $q, $timeout, $http, scope, $location);
+            };
+
 
             return api;
         }];
