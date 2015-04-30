@@ -23,41 +23,13 @@
 
     var module = angular.module('OAuth', []);
 
-    // Global container for the iframe
-    var container = document.createElement('div'),
-        iframeHidden = '<iframe sandbox="allow-scripts allow-same-origin"></iframe>',
-        origin = window.location.protocol + '//' + window.location.hostname,
-        elWindow = angular.element(window);
-
-    container = angular.element(container);
-    container.attr('id', 'coauth');
-    container.attr('style', 'width: 1px; height: 1px;');
-    angular.element(document.body).append(container);
-
-
-    if (window.location.port !== '') {
-        origin += ':' + window.location.port;
-    }
-
 
     module
     .provider('$comms', ['$httpProvider', function ($httpProvider) {
-        var endpoint,           // List of configured service endpoints
-            config,             // Current state for each service
-            ignore_list = {},   // List of URI's we don't want to retry
-
-            // These functions to be provided by the service
-            retryRequest = angular.noop,
-            authenticate = angular.noop,
-
-            // This is the current state
-            authenticating = null,
-            authenticated = false,
-            authenticated_at = 0,
-            access_token,
-            request_buffer = [],
-            request_retry = [];
-
+        var endpoints = [],     // List of configured service endpoints
+            lookup = {},
+            ignore_list = {},
+            provider = this;   // List of URI's we don't want to retry
 
 
         // Add arguments to the URI ignore list
@@ -83,9 +55,19 @@
         //  access_token (set by response - timer reference)
         //  waiting_for_token
         this.service = function (options) {
-            var regex = new RegExp(options.api_endpoint, '');
-            endpoint = regex;        // Speeds up matching later
-            config = options;
+            var enpoint = new OAuthEndPoint(options);
+
+            if (options.isolate) {
+                endpoints.push(enpoint);
+            } else {
+                endpoints.unshift(enpoint);
+            }
+
+            if (options.id) {
+                lookup[options.id] = enpoint;
+            }
+
+            return enpoint;
         };
 
 
@@ -99,25 +81,36 @@
             return {
                 // Ensure the access token is attached to API requests
                 request: function (request) {
-                    if (request.url.match(endpoint)) {
-                        if (authenticated) {
-                            request.sent_at = Date.now();
-                            request.headers.Authorization = 'Bearer ' + access_token;
+                    var endpoint,
+                        request_buffer,
+                        config,
+                        i;
 
-                        } else if (!config.when_prompted || request_buffer.length > 0) {
-                            var deferred = $q.defer();
+                    for (i = 0; i < endpoints.length; i += 1) {
+                        endpoint = endpoints[i];
+                        request_buffer = endpoint.request_buffer();
+                        config = endpoint.config();
 
-                            // We save the request and instead request a token
-                            request_buffer.push({
-                                request: request,
-                                deferred: deferred
-                            });
+                        if (request.url.match(endpoint.uri())) {
+                            if (endpoint.authenticated()) {
+                                request.sent_at = Date.now();
+                                request.headers.Authorization = 'Bearer ' + endpoint.access_token();
 
-                            if (!authenticating) {
-                                authenticate();
+                            } else if (!config.when_prompted || request_buffer.length > 0) {
+                                var deferred = $q.defer();
+
+                                // We save the request and instead request a token
+                                request_buffer.push({
+                                    request: request,
+                                    deferred: deferred
+                                });
+
+                                if (!endpoint.authenticating()) {
+                                    endpoint.authenticate();
+                                }
+
+                                return deferred.promise;
                             }
-
-                            return deferred.promise;
                         }
                     }
 
@@ -125,30 +118,45 @@
                 },
 
                 responseError: function (response) {
+
                     // Check if failures to the URL are to be ignored
                     if (
                         response.status == 401 && 
-                        ignore_list[response.config.url] === undefined &&
-                        response.config.url.match(endpoint)
+                        ignore_list[response.config.url] === undefined
                     ) {
-                        var deferred = $q.defer();
+                        var endpoint,
+                            request_buffer,
+                            deferred,
+                            config,
+                            match,
+                            i;
 
-                        if (authenticated_at > response.config.sent_at) {
-                            // retry request if auth occured after the request was made
-                            retryRequest(response.config, deferred);
 
-                        } else {
-                            request_retry.push({
-                                response: response,
-                                deferred: deferred
-                            });
+                        for (i = 0; i < endpoints.length; i += 1) {
+                            endpoint = endpoints[i];
+                            request_retry = endpoint.request_retry();
 
-                            if (!authenticating) {
-                                authenticate();
+                            if (response.config.url.match(endpoint.uri())) {
+                                deferred = $q.defer();
+
+                                if (endpoint.authenticated_at() > response.config.sent_at) {
+                                    // retry request if auth occured after the request was made
+                                    endpoint.retryRequest(response.config, deferred);
+
+                                } else {
+                                    request_retry.push({
+                                        response: response,
+                                        deferred: deferred
+                                    });
+
+                                    if (!endpoint.authenticating()) {
+                                        endpoint.authenticate();
+                                    }
+                                }
+
+                                return deferred.promise;    // no need to break;
                             }
                         }
-
-                        return deferred.promise;    // no need to break;
                     }
 
                     // Otherwise continue the rejection
@@ -169,359 +177,61 @@
         function ($window, $q, $timeout, $http, scope, $location) {
 
             var api = {},
-                expired_timeout,
-                tokenNotifier = $q.defer(),
-                inToAt = function (time) {
-                    return time * 1000 + Date.now();
-                },
-                nextTimer = function (expiresAt) {
-                    var timerIn = Math.min(expiresAt - Date.now() - 500, 20000);
-
-                    expired_timeout = $timeout(function () {
-                        if ((expiresAt - 500) <= Date.now()) {
-                            authenticated = false;
-                            if (config.proactive && !config.when_prompted) {
-                                authenticate();
-                            }
-                        } else {
-                            nextTimer(expiresAt);
-                        }
-                    }, Math.max(timerIn, 0));
-                },
-                authComplete = function (token, expires, noSave) {
-                    var buffered = request_buffer,
-                        do_retry = request_retry;
-
-                    request_buffer = [];
-                    request_retry = [];
-
-                    authenticated_at = Date.now();
-                    authenticating = null;
-                    authenticated = true;
-                    access_token = token;
-
-                    if (!noSave) {
-                        localStorage.setItem('accessToken', token);
-                        localStorage.setItem('accessExpiry', expires);
-                    }
-
-                    if (expired_timeout) {
-                        $timeout.cancel(expired_timeout);
-                    }
-                    nextTimer(expires);
-
-                    angular.forEach(buffered, function (req) {
-                        var request = req.request;
-                        request.sent_at = Date.now();
-                        request.headers.Authorization = 'Bearer ' + access_token;
-
-                        req.deferred.resolve(request);
-                        //retryRequest(req.request, req.deferred);
-                    });
-
-                    angular.forEach(do_retry, function (res) {
-                        retryRequest(res.response.config, res.deferred);
-                    });
-
-                    // This is effectively next_tick so the page has time to load if
-                    // we are loading the tokens from the cache.
-                    $timeout(function () {
-                        tokenNotifier.notify(access_token);
-                        scope.$broadcast('$comms.authenticated', access_token);
-                    });
-                },
-                refreshRequest = function (code) {
-                    var options = {
-                            client_id: config.client_id,
-                            redirect_uri: config.redirect_uri
-                        },
-                        performPost = function () {
-                            return $http.post(config.oauth_tokens, options, {
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'Accept': 'application/json'
-                                }
-                            }).then(function (success) {
-                                success = success.data;
-
-                                // setRefreshTokenMark
-                                localStorage.setItem('refreshToken', success.refresh_token);
-    
-                                // Place the access code in the system
-                                authComplete(success.access_token, inToAt(success.expires_in));
-
-                                return success.access_token;
-                            }, function (error) {
-                                // Refresh token is no more
-                                // 404 == couchbase error, 500 == other and we should ignore
-                                if (error.status == 400 || error.status == 401) {
-                                    localStorage.removeItem('refreshToken');
-                                    return requestToken();
-                                }
-
-                                // Failure here means we should start again.
-                                window.setTimeout(function() {
-                                    location.reload();
-                                }, 2000);
-
-                                // Hang the promise chain
-                                return $q.defer().promise;
-                            });
-                        };
-
-                    if (code === undefined) {
-                        options.grant_type = 'refresh_token';
-                        options.refresh_token = localStorage.getItem('refreshToken');
-                        return performPost();
-                    }
-                    
-                    options.grant_type = 'authorization_code';
-                    options.code = code;
-                    return performPost();
-                },
-                iframeRequest = function (url, deferred) {
-                    var iframe = angular
-                            .element(iframeHidden)
-                            .attr('src', url),
-
-                        handler,
-                        timeout,
-
-                        cleanUp = function () {
-                            // remove any existing elements auth attempts
-                            if (iframe) {
-                                iframe.remove();
-                                iframe = undefined;
-                            }
-
-                            if (handler) {
-                                elWindow.unbind('message', handler);
-                                handler = undefined;
-                            }
-                        };
-
-                    container.append(iframe);
-
-                    // iframe or pop-up uses this to communicate with us
-                    // curries in request variables
-                    handler = function (message) {
-                        message = message.originalEvent || message;
-                        if (message.source === iframe[0].contentWindow) {
-                            if (timeout) {
-                                $timeout.cancel(timeout);
-                                timeout = null;
-                            }
-
-                            switch (message.data) {
-                            case 'login':
-                            case 'cancel':
-                            case 'error':
-                                cleanUp();
-                                scope.$apply(function () {
-                                    deferred.reject(message.data);
-                                });
-                                break;
-                            case 'retry':
-                                // Lets request that again
-                                iframe.removeAttr('src').attr('src', url);
-                                break;
-                            default:
-                                if (message.origin === origin) {
-                                    cleanUp();
-                                    scope.$apply(function () {
-                                        deferred.resolve(JSON.parse(message.data));
-                                    });
-                                }
-                            }
-                        }
-                    };
-
-                    elWindow.bind('message', handler);
-
-                    timeout = $timeout(function () {
-                        timeout = null;
-                        cleanUp();
-                        deferred.reject('timeout');
-                    }, 30000);
-                },
-                requestToken = function (type) {
-                    var deferred,
-                        request,
-                        token = localStorage.getItem('refreshToken');
-
-                    // Use refresh tokens when available
-                    if (config.oauth_tokens && (token || $location.search().trust) && type !== 'code') {
-                        if (token) {
-                            return refreshRequest();
-                        }
-
-                        return requestToken('code').then(function (code) {
-                            // Use the grant code to request a refresh token
-                            return refreshRequest(code.code);
-                        });
-                    }
-
-                    // set the defaults
-                    type = type || 'token';
-
-                    // Build the request
-                    deferred = $q.defer();
-                    request = config.oauth_server + '?response_type=' + type +
-                                '&redirect_uri=' + encodeURIComponent(config.redirect_uri) +
-                                '&client_id=' + encodeURIComponent(config.client_id);
-
-                    if (config.scope) {
-                        request += '&scope=' + encodeURIComponent(config.scope);
-                    }
-
-                    request += '&time=' + Date.now();
-                    iframeRequest(request, deferred);
-
-                    return deferred.promise.then(function (tokenResp) {
-                        if (type === 'code') {
-                            return refreshRequest(tokenResp.code);
-                        }
-
-                        authComplete(tokenResp.token, inToAt(tokenResp.expires_in));
-                        return tokenResp.token;
-                    }, function (failed) {
-                        // Fail all existing requests
-                        var requests = request_buffer,
-                            retries = request_retry;
-                        request_buffer = [];
-                        request_retry = [];
-
-                        authenticated = false;
-                        access_token = null;
-
-                        angular.forEach(requests, function (req) {
-                            req.deferred.reject(failed);
-                        });
-
-                        // Fail with the original failure
-                        angular.forEach(retries, function (res) {
-                            req.deferred.reject(res.response);
-                        });
-
-                        return $q.reject(failed);
-                    });
-                },
-
-                tempExpires = localStorage.getItem('accessExpiry');
-
-
-
-            // Attempt to load any existing tokens from the cache
-            access_token = localStorage.getItem('accessToken');
-            if (tempExpires && access_token) {
-                tempExpires = parseInt(tempExpires);
-
-                if ((tempExpires - 1000) > Date.now()) {
-                    authComplete(access_token, tempExpires, true);
-                }
-            }
-
-
-            // These are accessed by the interceptors
-            retryRequest = function (request, deferred) {
-                deferred.resolve($http(request));
-            };
-
-            authenticate = function (type, do_login) {
-                if (authenticating) { return authenticating; }
-
-                if (expired_timeout) {
-                    $timeout.cancel(expired_timeout);
-                    expired_timeout = null;
-                }
-
-                authenticated = false;
-                authenticating = requestToken(type);
-
-                return authenticating.catch(function (reason) {
-                    if ((do_login === undefined || do_login) && config.login_redirect && reason === 'login') {
-                        var redirect = config.login_redirect();
-                        if (redirect.then) {
-                            redirect.then(function (uri) {
-                                $window.location = uri;
-                            });
-                        } else {
-                            $window.location = redirect;
-                        }
-                        return $q.defer().promise;
+                getEndpoint = function (id) {
+                    if (id) {
+                        return lookup[id];
                     } else {
-                        // Else we want to retry authentication
-                        authenticating = null;
+                        return endpoints[0];
                     }
+                };
 
-                    // Continue the failure
-                    return $q.reject(reason);
-                });
-            };
+
+            // Provide the endpoint all the required deps
+            angular.forEach(endpoints, function (endpoint) {
+                endpoint.onLoad($window, $q, $timeout, $http, scope, $location);
+            });
 
 
             // These are public API calls:
-            api.isRemembered = function () {
-                !!localStorage.getItem('refreshToken');
+            api.isRemembered = function (id) {
+                return getEndpoint(id).isRemembered();
             };
 
-            api.rememberMe = function () {
-                if (api.isRemembered()) {
-                    var deferred = $q.defer();
-                    deferred.resolve(true);
-                    return deferred.promise;
-                }
-
-                if (authenticating) {
-                    return authenticating.finally(api.rememberMe);
-                }
-
-                return authenticate('code', true);
+            api.rememberMe = function (id) {
+                return getEndpoint(id).rememberMe();
             };
 
             // Non-destructive authentication attempt
-            api.tryAuth = function (force) {
-                if (authenticating) {
-                    return authenticating;
-                }
-
-                var deferred = $q.defer();
-
-                if (authenticated) {
-                    deferred.resolve(access_token);
-                } else {
-                    if (force) {
-                        return authenticate(null, true);
-                    }
-
-                    deferred.reject(false);
-                }
-
-                return deferred.promise;
+            api.tryAuth = function (force, id) {
+                return  getEndpoint(id).tryAuth(force);
             };
 
-            api.getToken = function () {
-                return api.tryAuth(true);
+            api.getToken = function (id) {
+                return api.tryAuth(true, id);
             };
 
-            api.authenticated = function () {
-                return authenticated;
+            api.authenticated = function (id) {
+                return getEndpoint(id).authenticated();
             };
 
-            api.clearAuth = function () {
-                localStorage.removeItem('accessToken');
-                localStorage.removeItem('accessExpiry');
-                localStorage.removeItem('refreshToken');
+            api.clearAuth = function (id) {
+                return getEndpoint(id).clearAuth();
             };
 
             // Callback on token update
-            api.notifier = function (callback) {
-                tokenNotifier.promise.then(angular.noop, angular.noop, callback);
+            api.notifier = function (callback, id) {
+                getEndpoint(id).notifier(callback);
             };
 
-            if (config.proactive && !authenticated && !config.when_prompted) {
-                authenticate();
-            }
+
+            api.hasProvider = function (id) {
+                return lookup[id];
+            };
+
+            api.addProvider = function (config) {
+                provider.service(config).onLoad($window, $q, $timeout, $http, scope, $location);
+            };
+
 
             return api;
         }];
