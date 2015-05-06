@@ -124,7 +124,8 @@
                         response.status == 401 && 
                         ignore_list[response.config.url] === undefined
                     ) {
-                        var endpoint,
+                        var request_retry,
+                            endpoint,
                             request_buffer,
                             deferred,
                             config,
