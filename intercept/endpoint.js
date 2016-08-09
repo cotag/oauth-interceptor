@@ -2,6 +2,15 @@
     'use strict';
 
 
+    var inIframe = function () {
+        try {
+            return window.self !== window.top;
+        } catch (e) {
+            return true;
+        }
+    };
+
+
     window.OAuthEndPoint = function (config) {
             var api = this,
                 endpoint = new RegExp(config.api_endpoint, ''),           // List of configured service endpoints
@@ -343,28 +352,62 @@
                     expired_timeout = null;
                 }
 
-                authenticated = false;
-                authenticating = requestToken(type);
+                if (inIframe() && !$location.search().forceauth) {
+                    var tempExpires,
+                        deferred = $q.defer(),
+                        getUpdatedToken = function () {
+                            access_token = localStorage.getItem(accessTokenKey);
+                            tempExpires = localStorage.getItem(accessExpiryKey)
 
-                return authenticating.catch(function (reason) {
-                    if ((do_login === undefined || do_login) && config.login_redirect && reason === 'login') {
-                        var redirect = config.login_redirect();
-                        if (redirect.then) {
-                            redirect.then(function (uri) {
-                                $window.location = uri;
-                            });
+                            if (tempExpires && access_token) {
+                                tempExpires = parseInt(tempExpires);
+
+                                if ((tempExpires - 1000) > Date.now()) {
+                                    authComplete(access_token, tempExpires, true);
+                                    deferred.resolve(access_token);
+                                } else {
+                                    $timeout(function () {
+                                        getUpdatedToken();
+                                    }, 100);
+                                }
+                            } else {
+                                console.warn('No token found for page in iFrame. Use forceauth param if this page should authenticate');
+                                $timeout(function () {
+                                    getUpdatedToken();
+                                }, 1000);
+                            }
+                        };
+
+                    authenticated = false;
+                    authenticating = deferred.promise;
+
+                    getUpdatedToken();
+
+                    return authenticating;
+                } else {
+                    authenticated = false;
+                    authenticating = requestToken(type);
+
+                    return authenticating.catch(function (reason) {
+                        if ((do_login === undefined || do_login) && config.login_redirect && reason === 'login') {
+                            var redirect = config.login_redirect();
+                            if (redirect.then) {
+                                redirect.then(function (uri) {
+                                    $window.location = uri;
+                                });
+                            } else {
+                                $window.location = redirect;
+                            }
+                            return $q.defer().promise;
                         } else {
-                            $window.location = redirect;
+                            // Else we want to retry authentication
+                            authenticating = null;
                         }
-                        return $q.defer().promise;
-                    } else {
-                        // Else we want to retry authentication
-                        authenticating = null;
-                    }
 
-                    // Continue the failure
-                    return $q.reject(reason);
-                });
+                        // Continue the failure
+                        return $q.reject(reason);
+                    });
+                }
             };
 
 
