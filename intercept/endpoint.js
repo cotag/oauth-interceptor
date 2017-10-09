@@ -276,7 +276,7 @@
 
                         // Fail with the original failure
                         angular.forEach(retries, function (res) {
-                            req.deferred.reject(res.response);
+                            res.deferred.reject(res.response);
                         });
 
                         return $q.reject(failed);
